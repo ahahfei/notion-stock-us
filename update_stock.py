@@ -2,38 +2,49 @@ import os
 import sys
 import time
 import random
-from notion_client import Client
+import requests
 import yfinance as yf
 
-# 1. 初始化 Notion Client
-notion_token = os.environ.get("NOTION_TOKEN")
-database_id = os.environ.get("DATABASE_ID")
+# 1. 讀取環境變數
+NOTION_TOKEN = os.environ.get("NOTION_TOKEN")
+DATABASE_ID = os.environ.get("DATABASE_ID")
 
-if not notion_token or not database_id:
+if not NOTION_TOKEN or not DATABASE_ID:
     print("錯誤：找不到 NOTION_TOKEN 或 DATABASE_ID 環境變數。")
     sys.exit(1)
 
-notion = Client(auth=notion_token)
+# 2. 設定 Notion 官方原生 API 標頭
+HEADERS = {
+    "Authorization": f"Bearer {NOTION_TOKEN}",
+    "Content-Type": "application/json",
+    "Notion-Version": "2022-06-28"  # 官方標準穩定的 API 版本
+}
 
 def get_notion_stocks():
-    """從美股 Notion Database 取得所有股票資料"""
+    """直接使用原生 HTTP 請求取得美股 Notion Database 所有資料"""
     stocks = []
     has_more = True
     start_cursor = None
+    url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     
     while has_more:
+        body = {}
+        if start_cursor:
+            body["start_cursor"] = start_cursor
+            
         try:
-            # 修正：使用 getattr 安全地獲取 query 方法，徹底避免 Invalid request URL 錯誤
-            query_func = getattr(notion.databases, "query")
-            if start_cursor:
-                response = query_func(database_id=database_id, start_cursor=start_cursor)
-            else:
-                response = query_func(database_id=database_id)
+            response = requests.post(url, headers=HEADERS, json=body, timeout=15)
+            # 如果 Notion 沒給過，或 Token 有錯，這邊會直接顯示原因
+            if response.status_code != 200:
+                print(f"Notion API 回傳錯誤 ({response.status_code}): {response.text}")
+                break
+                
+            data = response.json()
         except Exception as e:
-            print(f"查詢 Notion 資料庫時發生錯誤: {e}")
+            print(f"發送 Notion 請求時發生網路錯誤: {e}")
             break
         
-        for row in response.get("results", []):
+        for row in data.get("results", []):
             page_id = row["id"]
             properties = row.get("properties", {})
             
@@ -53,8 +64,8 @@ def get_notion_stocks():
             if ticker:
                 stocks.append({"page_id": page_id, "ticker": ticker})
                 
-        has_more = response.get("has_more", False)
-        start_cursor = response.get("next_cursor")
+        has_more = data.get("has_more", False)
+        start_cursor = data.get("next_cursor")
         
     return stocks
 
@@ -76,21 +87,24 @@ def get_single_stock_price(ticker):
     return None
 
 def update_notion_price(page_id, price):
-    """更新 Notion 的 Current price 欄位"""
-    try:
-        # 修正：更新頁面也改用安全屬性呼ガイ，避免底層網址衝突
-        update_func = getattr(notion.pages, "update")
-        update_func(
-            page_id=page_id,
-            properties={
-                "Current price": {
-                    "number": price
-                }
+    """直接使用原生 HTTP PATCH 更新 Notion 頁面"""
+    url = f"https://api.notion.com/v1/pages/{page_id}"
+    body = {
+        "properties": {
+            "Current price": {
+                "number": price
             }
-        )
-        return True
+        }
+    }
+    try:
+        response = requests.patch(url, headers=HEADERS, json=body, timeout=15)
+        if response.status_code == 200:
+            return True
+        else:
+            print(f"更新頁面失敗 ({response.status_code}): {response.text}")
+            return False
     except Exception as e:
-        print(f"更新 Notion 失敗 (Page ID: {page_id}): {e}")
+        print(f"網路連線發送更新失敗 (Page ID: {page_id}): {e}")
         return False
 
 def main():
@@ -118,7 +132,7 @@ def main():
         else:
             print(f"跳過 {ticker}：未能取得有效股價。")
             
-        # 隨機休息 1.5 ~ 2.5 秒，防止被 Yahoo Finance 限流封鎖
+        # 隨機休息 1.5 ~ 2.5 秒，防止被 Yahoo Finance 限流
         time.sleep(random.uniform(1.5, 2.5))
             
     print(f"執行完畢！美股成功更新 {success_count} / {len(stocks)} 筆資料。")
