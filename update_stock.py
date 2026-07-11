@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+import random
 from notion_client import Client
 import yfinance as yf
 
@@ -14,7 +16,7 @@ if not notion_token or not database_id:
 notion = Client(auth=notion_token)
 
 def get_notion_stocks():
-    """從 Notion Database 取得所有股票資料"""
+    """從美股 Notion Database 取得所有股票資料"""
     stocks = []
     has_more = True
     start_cursor = None
@@ -30,16 +32,18 @@ def get_notion_stocks():
             page_id = row["id"]
             properties = row.get("properties", {})
             
-            # 取得 Ticker 欄位
-            ticker_data = properties.get("Ticker", {})
-            ticker_type = ticker_data.get("type")
-            
+            # 同時支援名為 'Ticker' 或 'Name' 的欄位
             ticker = ""
-            # 同時支援 Rich Text (文字屬性) 與 Title (標題屬性)
-            if ticker_type == "rich_text" and ticker_data.get("rich_text"):
-                ticker = "".join([t["plain_text"] for t in ticker_data["rich_text"]]).strip()
-            elif ticker_type == "title" and ticker_data.get("title"):
-                ticker = "".join([t["plain_text"] for t in ticker_data["title"]]).strip()
+            for field_name in ["Ticker", "Name"]:
+                ticker_data = properties.get(field_name, {})
+                ticker_type = ticker_data.get("type")
+                
+                if ticker_type == "rich_text" and ticker_data.get("rich_text"):
+                    ticker = "".join([t["plain_text"] for t in ticker_data["rich_text"]]).strip()
+                    break
+                elif ticker_type == "title" and ticker_data.get("title"):
+                    ticker = "".join([t["plain_text"] for t in ticker_data["title"]]).strip()
+                    break
                 
             if ticker:
                 stocks.append({"page_id": page_id, "ticker": ticker})
@@ -50,13 +54,11 @@ def get_notion_stocks():
     return stocks
 
 def get_single_stock_price(ticker):
-    """改用 yf.Ticker 個別抓取最新股價，避開 download() 的環境衝突問題"""
+    """個別抓取最新美股股價"""
     try:
         t = yf.Ticker(ticker)
-        # 嘗試從 fast_info 取得最新價格
         price = t.fast_info.get('last_price')
         
-        # 如果 fast_info 拿不到，改從 history 拿最後一筆收盤價
         if price is None:
             hist = t.history(period="1d")
             if not hist.empty:
@@ -85,17 +87,15 @@ def update_notion_price(page_id, price):
         return False
 
 def main():
-    print("開始執行 Notion 股價更新排程...")
+    print("開始執行【美股】Notion 股價更新排程...")
     
-    # 步驟 1: 抓取 Notion 資料
     stocks = get_notion_stocks()
     if not stocks:
-        print("Notion Database 中沒有找到任何 Ticker，請確認欄位名稱是否為 'Ticker' 且有資料。")
+        print("美股 Database 中沒有找到任何股票代號。")
         return
         
-    print(f"成功從 Notion 讀取到 {len(stocks)} 筆股票資料。")
+    print(f"成功從 Notion 讀取到 {len(stocks)} 筆美股資料。")
     
-    # 步驟 2 & 步驟 3: 逐一查詢並更新到 Notion
     success_count = 0
     for stock in stocks:
         ticker = stock["ticker"]
@@ -111,7 +111,11 @@ def main():
         else:
             print(f"跳過 {ticker}：未能取得有效股價。")
             
-    print(f"執行完畢！成功更新 {success_count} / {len(stocks)} 筆資料。")
+        # 隨機休息 1.5 ~ 2.5 秒，防止被 Yahoo Finance 限流封鎖
+        time.sleep(random.uniform(1.5, 2.5))
+            
+    print(f"執行完畢！美股成功更新 {success_count} / {len(stocks)} 筆資料。")
 
 if __name__ == "__main__":
     main()
+    
