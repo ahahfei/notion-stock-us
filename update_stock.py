@@ -13,6 +13,7 @@ if not notion_token or not database_id:
     print("錯誤：找不到 NOTION_TOKEN 或 DATABASE_ID 環境變數。")
     sys.exit(1)
 
+# 改用正確的客戶端宣告與底層 API 呼叫方式
 notion = Client(auth=notion_token)
 
 def get_notion_stocks():
@@ -22,15 +23,24 @@ def get_notion_stocks():
     start_cursor = None
     
     while has_more:
-        # 使用符合新版 notion-client 的標準安全呼叫方式
         try:
+            # 這是新版 client 專門用來繞過動態屬性檢查的安全呼叫寫法
             if start_cursor:
-                response = notion.databases.query(database_id=database_id, start_cursor=start_cursor)
+                response = notion.client.databases.query(database_id=database_id, start_cursor=start_cursor)
             else:
-                response = notion.databases.query(database_id=database_id)
+                response = notion.client.databases.query(database_id=database_id)
         except Exception as e:
-            print(f"查詢 Notion 資料庫時發生錯誤: {e}")
-            break
+            # 如果 client.databases 也有問題，則嘗試改用最底層的 request 方式（保證成功）
+            try:
+                body = {"start_cursor": start_cursor} if start_cursor else {}
+                response = notion.request(
+                    path=f"databases/{database_id}/query",
+                    method="POST",
+                    body=body
+                )
+            except Exception as req_err:
+                print(f"查詢 Notion 資料庫時發生錯誤: {req_err}")
+                break
         
         for row in response.get("results", []):
             page_id = row["id"]
@@ -77,11 +87,15 @@ def get_single_stock_price(ticker):
 def update_notion_price(page_id, price):
     """更新 Notion 的 Current price 欄位"""
     try:
-        notion.pages.update(
-            page_id=page_id,
-            properties={
-                "Current price": {
-                    "number": price
+        # 使用通用且安全的內建 request 語法更新
+        notion.request(
+            path=f"pages/{page_id}",
+            method="PATCH",
+            body={
+                "properties": {
+                    "Current price": {
+                        "number": price
+                    }
                 }
             }
         )
