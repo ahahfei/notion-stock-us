@@ -22,11 +22,15 @@ def get_notion_stocks():
     start_cursor = None
     
     while has_more:
-        kwargs = {"database_id": database_id}
-        if start_cursor:
-            kwargs["start_cursor"] = start_cursor
-            
-        response = notion.databases.query(**kwargs)
+        # 使用符合新版 notion-client 的標準安全呼叫方式
+        try:
+            if start_cursor:
+                response = notion.databases.query(database_id=database_id, start_cursor=start_cursor)
+            else:
+                response = notion.databases.query(database_id=database_id)
+        except Exception as e:
+            print(f"查詢 Notion 資料庫時發生錯誤: {e}")
+            break
         
         for row in response.get("results", []):
             page_id = row["id"]
@@ -91,7 +95,7 @@ def main():
     
     stocks = get_notion_stocks()
     if not stocks:
-        print("美股 Database 中沒有找到任何股票代號。")
+        print("美股 Database 中沒有找到任何股票代號，或者讀取失敗。")
         return
         
     print(f"成功從 Notion 讀取到 {len(stocks)} 筆美股資料。")
@@ -118,4 +122,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
